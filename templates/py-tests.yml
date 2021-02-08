@@ -1,0 +1,69 @@
+# Python step template for running all tests. 
+# Includes pytest with codecoverage, pylint with failover and publishing results
+
+# Python Testing Template
+parameters:
+  pythonVersion: ''
+  pythonRequirements: ''
+  workingDirectory: ''
+  moduleName: ''
+
+steps:
+  - task: UsePythonVersion@0
+    inputs:
+      versionSpec: '3.x'
+      addToPath: true
+    
+  # Setup VirtualEnv and Install requirements
+  - script: |
+      echo "Creating new virtualenv"
+      python3 -m venv --clear .env
+      source .env/bin/activate
+      python3 -m pip install -r ${{ parameters.pythonRequirements }}
+      python3 -m pip install pylint
+      python3 -m pip install pylint-fail-under
+      pip freeze
+    displayName: 'Setup VirtualEnv & Requirements'
+    workingDirectory: ${{ parameters.workingDirectory }}
+
+  # Lint our code
+  - script: |
+      echo "Running Pylint"
+      source .env/bin/activate
+      find . -type d -name .env -prune -o -name "*.py" ! -name "versioneer.py" ! -name "_*" -print | xargs pylint-fail-under --fail_under 8.0
+    displayName: 'Linting with Pylint - Need a score > 8.0'
+    workingDirectory: ${{ parameters.workingDirectory }}
+
+  # Run Unit Tests with pytest (unittest is not supported by Azure Devops)
+  - script: |
+      export PYTHONPATH=`pwd`
+      echo "This is my python path $PYTHONPATH"
+      source .env/bin/activate
+      python3 -m pip install pytest pytest-cov pytest-azurepipelines
+      pytest tests --doctest-modules --junitxml=junit/test-results.xml --cov=$MODULE --cov-report=xml --cov-report=html
+    displayName: 'Test with Pytest'
+    env:
+      MODULE: ${{ parameters.moduleName }}
+    workingDirectory: ${{ parameters.workingDirectory }}
+
+  # Deactivate Virtual Environment and Clean-up
+  - script: |
+      echo "Cleaning up Virtual Environment"
+      if [ -d ".env" ]; then echo "removing virtual environment" ; rm -rf .env ; else echo ".env directory doesn't exist" ; fi
+      pip freeze
+    displayName: 'Destroy VirtualEnv'
+    workingDirectory: ${{ parameters.workingDirectory }}
+
+  # Publish our Test results
+  - task: PublishTestResults@2
+    condition: succeededOrFailed()
+    inputs:
+      testResultsFiles: '**/test-*.xml'
+      testRunTitle: 'Publish test results for Python $(python.version)'
+
+  # Publish Code Coverage results
+  - task: PublishCodeCoverageResults@1
+    inputs:
+      codeCoverageTool: Cobertura
+      summaryFileLocation: '$(System.DefaultWorkingDirectory)/**/coverage.xml'
+      reportDirectory: '$(System.DefaultWorkingDirectory)/**/htmlcov'
