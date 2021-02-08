@@ -1,0 +1,95 @@
+# Python Packaging Pipeline
+# Branch policies currently manage triggering this pipeline on a PR.
+
+# Shared repository containing python step templates
+resources:
+  repositories:
+  - repository: SharedRepo
+    type: git
+    name: shared-python-pipeline
+    ref: master
+
+# In addition to PR in the branch policy, run pipeline on all commits to master branch
+trigger:
+  branches:
+    include:
+      - master
+
+# Global variables persistent in the pipeline
+variables:
+  ADO_Agent_Pool: 'my_agent_pool'
+   major: 1
+   minor: 0
+   patch: 0
+
+stages:
+- stage: Test
+  displayName: "Test Stage"
+  pool: $(agentPool)
+  jobs:
+   - job: TestSuite
+    dependsOn: []
+    displayName: 'Python Test Suite'
+    pool: $(agentPool)
+    steps:
+    - template: templates/py-tests.yml@SharedRepo
+      parameters:
+        pythonRequirements: 'tests/requirements.txt'
+        workingDirectory: my_working_directory
+
+- stage: Version
+  displayName: "Version Package"
+  pool: $(agentPool)
+  dependsOn: Test
+  condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'), eq(variables['Build.SourceBranch'], 'refs/heads/master'))
+  jobs:
+  - job: BuildVersion
+    displayName: "Updating BuildNumber with $(major).$(minor).$(patch)"
+    steps:
+      - bash: |
+          echo "Updating BuildNumber"
+          echo "##vso[build.updatebuildnumber]$(major).$(minor).$(patch)"
+        name: SetDevBuildName
+  - job: TagRepo
+    workspace:
+      clean: all
+    displayName: "Tag repo with BuildVersionNumber"
+    dependsOn: BuildVersion
+    steps:
+    - template: templates/tag-repo.yml@SharedRepo
+      parameters:
+        tagVersion: $(Build.BuildNumber)
+        repoId: $(Build.SourceVersion)
+
+- stage: Build
+  displayName: "Build Package"
+  dependsOn: Version
+  pool: $(agentPool)
+  condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'), eq(variables['Build.SourceBranch'], 'refs/heads/master'))
+  jobs:
+  - job: PythonBuild
+    displayName: 'Python Build'
+    steps:
+    - template: templates/py-build.yml@SharedRepo
+      parameters:
+        workingDirectory: my_working_directory
+        pythonRequirements: 'requirements.txt'
+        artifactName: my_cool_module
+        buildVersion: $(Build.BuildNumber)
+
+- stage: Publish
+  displayName: "Python Publish"
+  dependsOn: Build
+  pool: $(agentPool)
+  condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'), eq(variables['Build.SourceBranch'], 'refs/heads/master'))
+  jobs:
+  - job: PythonPublish
+    displayName: 'Publish Artifact'
+    steps:
+    - template: templates/py-publish.yml@SharedRepo
+      parameters:
+        workingDirectory: my_working_directory
+        buildVersion: $(Build.BuildNumber)
+        artifactFeed: my_azure_feed
+        artifactName: my_cool_module
+
